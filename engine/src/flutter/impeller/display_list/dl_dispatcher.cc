@@ -327,11 +327,14 @@ void DlDispatcherBase::saveLayer(const DlRect& bounds,
   }
 
   // The builder put the content's rect edges on whole units of this display
-  // list's coordinates. Those are whole pixels only under a whole-pixel
-  // translation.
+  // list's coordinates. Those are whole pixels only where the display list is
+  // played back with whole-pixel translations and unit scales; a mirror, such
+  // as an embedder's flip to a bottom-up framebuffer, keeps the grid too.
   const bool on_pixel_grid =
       !options.content_is_on_pixel_grid() ||
-      (initial_matrix_.IsTranslationOnly() &&
+      (initial_matrix_.IsTranslationScaleOnly() &&
+       std::abs(initial_matrix_.m[0]) == 1.0f &&
+       std::abs(initial_matrix_.m[5]) == 1.0f &&
        initial_matrix_.m[12] == std::round(initial_matrix_.m[12]) &&
        initial_matrix_.m[13] == std::round(initial_matrix_.m[13]));
 
