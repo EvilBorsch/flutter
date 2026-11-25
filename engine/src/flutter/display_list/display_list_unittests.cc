@@ -1597,8 +1597,8 @@ TEST_F(DisplayListTest, BackdropScrimOnPixelGridIsSingleSample) {
   scrim.DrawRect(DlRect::MakeXYWH(0, 0.5f, 1696, 1199.5f),
                  DlPaint(DlColor::kBlack().withAlphaF(0.4f)));
 
-  SaveLayerOptions options = BackdropLayerOptionsFor(
-      DlMatrix::MakeScale({2, 2, 1}), scrim.Build());
+  SaveLayerOptions options =
+      BackdropLayerOptionsFor(DlMatrix::MakeScale({2, 2, 1}), scrim.Build());
 
   EXPECT_TRUE(options.content_is_single_sample_compatible());
   EXPECT_TRUE(options.content_is_on_pixel_grid());
@@ -1633,8 +1633,7 @@ TEST_F(DisplayListTest, BackdropClippedScrimKeepsMultisampling) {
       DlRoundRect::MakeRectXY(DlRect::MakeWH(100, 100), 10, 10));
   scrim.DrawRect(DlRect::MakeWH(100, 100), DlPaint());
 
-  SaveLayerOptions options =
-      BackdropLayerOptionsFor(DlMatrix(), scrim.Build());
+  SaveLayerOptions options = BackdropLayerOptionsFor(DlMatrix(), scrim.Build());
 
   EXPECT_FALSE(options.content_is_single_sample_compatible());
 }
@@ -1645,8 +1644,7 @@ TEST_F(DisplayListTest, BackdropScrimWithOtherContentKeepsMultisampling) {
   scrim.DrawImageRect(MakeTestImage(100, 100, 5), DlRect::MakeWH(100, 100),
                       DlImageSampling::kLinear);
 
-  SaveLayerOptions options =
-      BackdropLayerOptionsFor(DlMatrix(), scrim.Build());
+  SaveLayerOptions options = BackdropLayerOptionsFor(DlMatrix(), scrim.Build());
 
   EXPECT_FALSE(options.content_is_single_sample_compatible());
 }

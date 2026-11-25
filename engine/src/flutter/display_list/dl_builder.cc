@@ -772,9 +772,9 @@ void DisplayListBuilder::RestoreLayer() {
       // A fill whose edges lie on pixel boundaries covers every sample of a
       // pixel or none, so the resolve of a multisampled layer reproduces
       // exactly what a single-sample layer stores.
-      layer_op->options = layer_op->options
-                              .with_content_is_single_sample_compatible()
-                              .with_content_is_on_pixel_grid();
+      layer_op->options =
+          layer_op->options.with_content_is_single_sample_compatible()
+              .with_content_is_on_pixel_grid();
     }
   }
 
