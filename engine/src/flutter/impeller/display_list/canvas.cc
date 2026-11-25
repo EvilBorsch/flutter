@@ -2874,6 +2874,20 @@ void Canvas::SaveLayer(const Paint& paint,
     // reuses one target.
     if (PooledTargetPaddingEnabled()) {
       allocation_size = allocation_size.Max(ISize::Ceil(layer_reach));
+      // A layer that scales, like a window shrinking into its icon or a
+      // screen zooming in, changes its size on every frame of the motion,
+      // and a growing one never fits a target of an earlier frame. Allocate
+      // a layer that covers at least half of its pass in both dimensions at
+      // the size of the pass, so the whole motion reuses one target instead
+      // of allocating a new full-screen-sized one per frame.
+      const ISize pass_size = render_passes_.back()
+                                  .GetInlinePassContext()
+                                  ->GetTexture()
+                                  ->GetSize();
+      if (allocation_size.width * 2 >= pass_size.width &&
+          allocation_size.height * 2 >= pass_size.height) {
+        allocation_size = allocation_size.Max(pass_size);
+      }
     }
     allocation_size = RoundUpPooledTargetSize(
         allocation_size, renderer_.GetContext()
