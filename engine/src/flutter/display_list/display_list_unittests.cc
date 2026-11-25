@@ -1560,7 +1560,121 @@ TEST_F(DisplayListTest, BackdropGeometryContentKeepsMultisampling) {
 
   DisplayListBuilder builder;
   builder.SaveLayer(std::nullopt, nullptr, &kTestBlurImageFilter1);
-  builder.DrawRect(DlRect::MakeWH(100, 100), DlPaint());
+  builder.DrawOval(DlRect::MakeWH(100, 100), DlPaint());
+  builder.Restore();
+
+  builder.Build()->Dispatch(expector);
+  EXPECT_TRUE(expector.all_expectations_checked());
+}
+
+// Records |content| the way a layer tree paints a picture under a backdrop
+// filter, like a dimming scrim over a blurred desktop, and returns the
+// options of that backdrop layer.
+static SaveLayerOptions BackdropLayerOptionsFor(
+    const DlMatrix& transform,
+    const sk_sp<DisplayList>& content) {
+  SaveLayerOptions recorded;
+  SAVE_LAYER_EXPECTOR(expector);
+  expector.addExpectation([&recorded](const SaveLayerOptions& options) {
+    recorded = options;
+    return true;
+  });
+
+  DisplayListBuilder builder;
+  builder.Transform(transform);
+  builder.SaveLayer(std::nullopt, nullptr, &kTestBlurImageFilter1);
+  builder.DrawDisplayList(content);
+  builder.Restore();
+  builder.Build()->Dispatch(expector);
+  EXPECT_TRUE(expector.all_expectations_checked());
+  return recorded;
+}
+
+TEST_F(DisplayListTest, BackdropScrimOnPixelGridIsSingleSample) {
+  // A full-screen scrim at a device pixel ratio of 2 with its origin on a
+  // half logical pixel: every edge lands on a whole device pixel.
+  DisplayListBuilder scrim;
+  scrim.DrawRect(DlRect::MakeXYWH(0, 0.5f, 1696, 1199.5f),
+                 DlPaint(DlColor::kBlack().withAlphaF(0.4f)));
+
+  SaveLayerOptions options = BackdropLayerOptionsFor(
+      DlMatrix::MakeScale({2, 2, 1}), scrim.Build());
+
+  EXPECT_TRUE(options.content_is_single_sample_compatible());
+  EXPECT_TRUE(options.content_is_on_pixel_grid());
+}
+
+TEST_F(DisplayListTest, BackdropScrimOffPixelGridKeepsMultisampling) {
+  // At a device pixel ratio of 2.25 the scrim's bottom edge is at 1350.5.
+  DisplayListBuilder scrim;
+  scrim.DrawRect(DlRect::MakeWH(1696, 600.25f),
+                 DlPaint(DlColor::kBlack().withAlphaF(0.4f)));
+
+  SaveLayerOptions options = BackdropLayerOptionsFor(
+      DlMatrix::MakeScale({2.25f, 2.25f, 1}), scrim.Build());
+
+  EXPECT_FALSE(options.content_is_single_sample_compatible());
+}
+
+TEST_F(DisplayListTest, BackdropScrimUnderRotationKeepsMultisampling) {
+  DisplayListBuilder scrim;
+  scrim.DrawRect(DlRect::MakeWH(100, 100), DlPaint());
+
+  SaveLayerOptions options = BackdropLayerOptionsFor(
+      DlMatrix::MakeRotationZ(DlDegrees(90)), scrim.Build());
+
+  EXPECT_FALSE(options.content_is_single_sample_compatible());
+}
+
+TEST_F(DisplayListTest, BackdropClippedScrimKeepsMultisampling) {
+  // The clip's edges would be multisampled, whatever the rect's are.
+  DisplayListBuilder scrim;
+  scrim.ClipRoundRect(
+      DlRoundRect::MakeRectXY(DlRect::MakeWH(100, 100), 10, 10));
+  scrim.DrawRect(DlRect::MakeWH(100, 100), DlPaint());
+
+  SaveLayerOptions options =
+      BackdropLayerOptionsFor(DlMatrix(), scrim.Build());
+
+  EXPECT_FALSE(options.content_is_single_sample_compatible());
+}
+
+TEST_F(DisplayListTest, BackdropScrimWithOtherContentKeepsMultisampling) {
+  DisplayListBuilder scrim;
+  scrim.DrawRect(DlRect::MakeWH(100, 100), DlPaint());
+  scrim.DrawImageRect(MakeTestImage(100, 100, 5), DlRect::MakeWH(100, 100),
+                      DlImageSampling::kLinear);
+
+  SaveLayerOptions options =
+      BackdropLayerOptionsFor(DlMatrix(), scrim.Build());
+
+  EXPECT_FALSE(options.content_is_single_sample_compatible());
+}
+
+TEST_F(DisplayListTest, BackdropStrokedOrBlurredRectKeepsMultisampling) {
+  DisplayListBuilder stroked;
+  stroked.DrawRect(DlRect::MakeWH(100, 100),
+                   DlPaint().setDrawStyle(DlDrawStyle::kStroke));
+  EXPECT_FALSE(BackdropLayerOptionsFor(DlMatrix(), stroked.Build())
+                   .content_is_single_sample_compatible());
+
+  DisplayListBuilder blurred;
+  blurred.DrawRect(DlRect::MakeWH(100, 100),
+                   DlPaint().setMaskFilter(&kTestMaskFilter1));
+  EXPECT_FALSE(BackdropLayerOptionsFor(DlMatrix(), blurred.Build())
+                   .content_is_single_sample_compatible());
+}
+
+TEST_F(DisplayListTest, BackdropRectDrawnDirectlyOnPixelGridIsSingleSample) {
+  SAVE_LAYER_EXPECTOR(expector);
+  expector.addExpectation([](const SaveLayerOptions& options) {
+    return options.content_is_single_sample_compatible() &&
+           options.content_is_on_pixel_grid();
+  });
+
+  DisplayListBuilder builder;
+  builder.SaveLayer(std::nullopt, nullptr, &kTestBlurImageFilter1);
+  builder.DrawRect(DlRect::MakeLTRB(10, 10, 20, 20), DlPaint());
   builder.Restore();
 
   builder.Build()->Dispatch(expector);

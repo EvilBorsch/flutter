@@ -250,6 +250,18 @@ class SaveLayerOptions {
     return options;
   }
 
+  // Qualifies content_is_single_sample_compatible(): the content is filled
+  // rects whose edges lie on whole units of the DisplayList's own
+  // coordinates. They cover the same pixels with and without multisampling
+  // only where those units are whole pixels, which the receiver checks
+  // against the transform it plays the DisplayList back with.
+  bool content_is_on_pixel_grid() const { return fContentIsOnPixelGrid; }
+  SaveLayerOptions with_content_is_on_pixel_grid() const {
+    SaveLayerOptions options(this);
+    options.fContentIsOnPixelGrid = true;
+    return options;
+  }
+
   SaveLayerOptions& operator=(const SaveLayerOptions& other) {
     flags_ = other.flags_;
     return *this;
@@ -268,6 +280,7 @@ class SaveLayerOptions {
       unsigned fHasBackdropFilter : 1;
       unsigned fContentIsUnbounded : 1;
       unsigned fContentIsSingleSampleCompatible : 1;
+      unsigned fContentIsOnPixelGrid : 1;
     };
     uint32_t flags_;
   };
@@ -353,6 +366,17 @@ class DisplayList : public SkRefCnt {
   /// through an ImageFilter that cannot compute the resulting bounds or
   /// when an unclipped backdrop filter is applied by a save layer.
   bool root_is_unbounded() const { return root_is_unbounded_; }
+
+  /// @brief    The filled rects, in this DisplayList's coordinates, that are
+  ///           all it renders, when it renders nothing else.
+  ///
+  /// Each is drawn with a paint whose coverage of a pixel does not depend
+  /// on multisampling once the rect's edges lie on the pixel grid, so a
+  /// layer that draws this DisplayList under a transform that puts them
+  /// there needs no multisampled color target for it. Empty otherwise.
+  const std::vector<DlRect>& rect_fill_content() const {
+    return rect_fill_content_;
+  }
 
   /// @brief    Indicates the maximum DlBlendMode used on any rendering op
   ///           in the root surface of the DisplayList.
@@ -529,6 +553,7 @@ class DisplayList : public SkRefCnt {
               DlBlendMode max_root_blend_mode,
               bool root_has_backdrop_filter,
               bool root_is_unbounded,
+              std::vector<DlRect>&& rect_fill_content,
               sk_sp<const DlRTree> rtree);
 
   static uint32_t next_unique_id();
@@ -554,6 +579,7 @@ class DisplayList : public SkRefCnt {
   const bool root_has_backdrop_filter_;
   const bool root_is_unbounded_;
   const DlBlendMode max_root_blend_mode_;
+  const std::vector<DlRect> rect_fill_content_;
 
   const sk_sp<const DlRTree> rtree_;
 

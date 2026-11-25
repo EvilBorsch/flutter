@@ -5,6 +5,7 @@
 #include "impeller/display_list/dl_dispatcher.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -325,13 +326,22 @@ void DlDispatcherBase::saveLayer(const DlRect& bounds,
     impeller_bounds = bounds;
   }
 
+  // The builder put the content's rect edges on whole units of this display
+  // list's coordinates. Those are whole pixels only under a whole-pixel
+  // translation.
+  const bool on_pixel_grid =
+      !options.content_is_on_pixel_grid() ||
+      (initial_matrix_.IsTranslationOnly() &&
+       initial_matrix_.m[12] == std::round(initial_matrix_.m[12]) &&
+       initial_matrix_.m[13] == std::round(initial_matrix_.m[13]));
+
   GetCanvas().SaveLayer(
       paint, impeller_bounds, backdrop, promise, total_content_depth,
       // Unbounded content can still have user specified bounds that require a
       // saveLayer to be created to perform the clip.
       options.can_distribute_opacity() && !options.content_is_unbounded(),
       backdrop_id,
-      options.content_is_single_sample_compatible()  //
+      options.content_is_single_sample_compatible() && on_pixel_grid  //
   );
 }
 

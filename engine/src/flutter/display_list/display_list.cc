@@ -44,6 +44,7 @@ DisplayList::DisplayList(DisplayListStorage&& storage,
                          DlBlendMode max_root_blend_mode,
                          bool root_has_backdrop_filter,
                          bool root_is_unbounded,
+                         std::vector<DlRect>&& rect_fill_content,
                          sk_sp<const DlRTree> rtree)
     : storage_(std::move(storage)),
       offsets_(std::move(offsets)),
@@ -59,6 +60,7 @@ DisplayList::DisplayList(DisplayListStorage&& storage,
       root_has_backdrop_filter_(root_has_backdrop_filter),
       root_is_unbounded_(root_is_unbounded),
       max_root_blend_mode_(max_root_blend_mode),
+      rect_fill_content_(std::move(rect_fill_content)),
       rtree_(std::move(rtree)) {
   FML_DCHECK(storage_.capacity() == storage_.size());
 }

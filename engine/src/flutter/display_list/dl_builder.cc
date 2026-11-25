@@ -4,6 +4,9 @@
 
 #include "flutter/display_list/dl_builder.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include "flutter/display_list/display_list.h"
 #include "flutter/display_list/dl_blend_mode.h"
 #include "flutter/display_list/dl_op_flags.h"
@@ -20,6 +23,14 @@
 namespace flutter {
 
 namespace {
+
+// Bounds the per-layer bookkeeping of LayerInfo::rect_fills.
+constexpr size_t kMaxRectFills = 4u;
+
+// A 4x multisample pattern keeps its samples at least 1/8 pixel inside the
+// pixel, so an edge this close to a pixel boundary covers the same samples
+// as the boundary itself, and the same pixel center.
+constexpr DlScalar kPixelGridTolerance = 1.0f / 64.0f;
 
 // Returns a stroked RoundRect that is equivalent to a provided DiffRoundRect,
 // if one exists.
@@ -173,6 +184,10 @@ sk_sp<DisplayList> DisplayListBuilder::Build() {
   bool root_has_backdrop_filter = current_layer().contains_backdrop_filter;
   bool root_is_unbounded = current_layer().is_unbounded;
   DlBlendMode max_root_blend_mode = current_layer().max_blend_mode;
+  std::vector<DlRect> rect_fill_content;
+  if (current_layer().content_is_rect_fills) {
+    rect_fill_content = std::move(current_layer().rect_fills);
+  }
 
   sk_sp<DlRTree> rtree;
   DlRect bounds;
@@ -211,7 +226,7 @@ sk_sp<DisplayList> DisplayListBuilder::Build() {
       std::move(storage), std::move(offsets), count, nested_bytes, nested_count,
       total_depth, bounds, opacity_compatible, is_safe, affects_transparency,
       max_root_blend_mode, root_has_backdrop_filter, root_is_unbounded,
-      std::move(rtree)));
+      std::move(rect_fill_content), std::move(rtree)));
 }
 
 static constexpr DlRect kEmpty = DlRect();
@@ -736,10 +751,31 @@ void DisplayListBuilder::RestoreLayer() {
     layer_op->options = layer_op->options.with_content_is_unbounded();
   }
 
+  const LayerInfo& layer = current_layer();
   if (layer_op->type == DisplayListOpType::kSaveLayerBackdrop &&
-      current_layer().content_is_single_sample_compatible) {
-    layer_op->options =
-        layer_op->options.with_content_is_single_sample_compatible();
+      layer.content_is_single_sample_compatible) {
+    if (layer.rect_fills.empty()) {
+      layer_op->options =
+          layer_op->options.with_content_is_single_sample_compatible();
+    } else if (layer.content_is_rect_fills &&
+               std::all_of(layer.rect_fills.begin(), layer.rect_fills.end(),
+                           [](const DlRect& rect) {
+                             const auto on_grid = [](DlScalar value) {
+                               return std::abs(value - std::round(value)) <=
+                                      kPixelGridTolerance;
+                             };
+                             return on_grid(rect.GetLeft()) &&
+                                    on_grid(rect.GetTop()) &&
+                                    on_grid(rect.GetRight()) &&
+                                    on_grid(rect.GetBottom());
+                           })) {
+      // A fill whose edges lie on pixel boundaries covers every sample of a
+      // pixel or none, so the resolve of a multisampled layer reproduces
+      // exactly what a single-sample layer stores.
+      layer_op->options = layer_op->options
+                              .with_content_is_single_sample_compatible()
+                              .with_content_is_on_pixel_grid();
+    }
   }
 
   // Ensure that the bounds transferred in the following call will be
@@ -1065,6 +1101,7 @@ void DisplayListBuilder::ClipRect(const DlRect& rect,
     return;
   }
   current_info().has_valid_clip = true;
+  current_layer().content_is_rect_fills = false;
   checkForDeferredSave();
   switch (clip_op) {
     case DlClipOp::kIntersect:
@@ -1096,6 +1133,7 @@ void DisplayListBuilder::ClipOval(const DlRect& bounds,
     return;
   }
   current_info().has_valid_clip = true;
+  current_layer().content_is_rect_fills = false;
   checkForDeferredSave();
   switch (clip_op) {
     case DlClipOp::kIntersect:
@@ -1132,6 +1170,7 @@ void DisplayListBuilder::ClipRoundRect(const DlRoundRect& rrect,
     return;
   }
   current_info().has_valid_clip = true;
+  current_layer().content_is_rect_fills = false;
   checkForDeferredSave();
   switch (clip_op) {
     case DlClipOp::kIntersect:
@@ -1168,6 +1207,7 @@ void DisplayListBuilder::ClipRoundSuperellipse(const DlRoundSuperellipse& rse,
     return;
   }
   current_info().has_valid_clip = true;
+  current_layer().content_is_rect_fills = false;
   checkForDeferredSave();
   switch (clip_op) {
     case DlClipOp::kIntersect:
@@ -1208,6 +1248,7 @@ void DisplayListBuilder::ClipPath(const DlPath& path,
     return;
   }
   current_info().has_valid_clip = true;
+  current_layer().content_is_rect_fills = false;
   checkForDeferredSave();
   switch (clip_op) {
     case DlClipOp::kIntersect:
@@ -1284,7 +1325,7 @@ void DisplayListBuilder::DrawDashedLine(const DlPoint& p0,
 }
 void DisplayListBuilder::drawRect(const DlRect& rect) {
   DisplayListAttributeFlags flags = kDrawRectFlags;
-  OpResult result = PaintResult(current_, flags);
+  OpResult result = PaintResult(current_, flags, &rect);
   if (result != OpResult::kNoEffect &&
       AccumulateOpBounds(rect.GetPositive(), flags)) {
     Push<DrawRectOp>(0, rect);
@@ -1806,7 +1847,19 @@ void DisplayListBuilder::DrawDisplayList(const sk_sp<DisplayList> display_list,
   DlPaint current_paint = current_;
   Push<DrawDisplayListOp>(0, display_list,
                           opacity < SK_Scalar1 ? opacity : SK_Scalar1);
-  current_layer().content_is_single_sample_compatible = false;
+  LayerInfo& layer = current_layer();
+  const std::vector<DlRect>& rect_fills = display_list->rect_fill_content();
+  const DlMatrix& matrix = GetMatrix();
+  if (!rect_fills.empty() && matrix.IsTranslationScaleOnly() &&
+      layer.rect_fills.size() + rect_fills.size() <= kMaxRectFills) {
+    // A DisplayList of nothing but filled rects is those rects here.
+    for (const DlRect& rect : rect_fills) {
+      layer.rect_fills.push_back(rect.TransformBounds(matrix));
+    }
+  } else {
+    layer.content_is_single_sample_compatible = false;
+    layer.content_is_rect_fills = false;
+  }
 
   // This depth increment accounts for every draw call in the child
   // DisplayList and is in addition to the implicit depth increment
@@ -2156,13 +2209,29 @@ DlColor DisplayListBuilder::GetEffectiveColor(const DlPaint& paint,
 
 DisplayListBuilder::OpResult DisplayListBuilder::PaintResult(
     const DlPaint& paint,
-    DisplayListAttributeFlags flags) {
-  if (flags.is_geometric()) {
-    // Impeller's path, text, and primitive geometries can derive edge
-    // coverage from MSAA. This invalidation is intentionally conservative:
-    // a culled or no-op geometry may leave a layer on the legacy path, but it
-    // can never incorrectly remove multisampling from visible geometry.
-    current_layer().content_is_single_sample_compatible = false;
+    DisplayListAttributeFlags flags,
+    const DlRect* rect_fill) {
+  LayerInfo& layer = current_layer();
+  const DlMatrix& matrix = GetMatrix();
+  // A plain fill of an axis-aligned rect, shaded once per pixel and blended
+  // by fixed-function blending, covers a pixel either fully or not at all
+  // once its edges lie on the pixel grid. The restore checks the edges.
+  if (rect_fill != nullptr && rect_fill->IsFinite() &&
+      layer.rect_fills.size() < kMaxRectFills &&
+      matrix.IsTranslationScaleOnly() &&
+      paint.getDrawStyle() == DlDrawStyle::kFill &&
+      paint.getMaskFilter() == nullptr && paint.getImageFilter() == nullptr &&
+      paint.getBlendMode() <= DlBlendMode::kModulate) {
+    layer.rect_fills.push_back(rect_fill->TransformBounds(matrix));
+  } else {
+    layer.content_is_rect_fills = false;
+    if (flags.is_geometric()) {
+      // Impeller's path, text, and primitive geometries can derive edge
+      // coverage from MSAA. This invalidation is intentionally conservative:
+      // a culled or no-op geometry may leave a layer on the legacy path, but
+      // it can never incorrectly remove multisampling from visible geometry.
+      layer.content_is_single_sample_compatible = false;
+    }
   }
   if (current_info().is_nop) {
     return OpResult::kNoEffect;

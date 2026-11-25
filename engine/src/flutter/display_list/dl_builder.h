@@ -573,6 +573,17 @@ class DisplayListBuilder final : public virtual DlCanvas,
     // multisampled color allocation and resolve has a material cost.
     bool content_is_single_sample_compatible = true;
 
+    // Filled rects, in root coordinates, that did not invalidate
+    // content_is_single_sample_compatible: they need no multisampling only
+    // where their edges lie on the pixel grid, which the restore checks.
+    // They come from this layer's own draws and from DisplayLists that
+    // render nothing but such rects.
+    std::vector<DlRect> rect_fills;
+
+    // Whether rect_fills is all this layer renders. Any other rendering
+    // operation or clip in the layer clears it.
+    bool content_is_rect_fills = true;
+
     bool is_group_opacity_compatible() const {
       return !opacity_incompatible_op_detected &&
              !layer_local_accumulator.overlap_detected();
@@ -802,8 +813,11 @@ class DisplayListBuilder final : public virtual DlCanvas,
   };
 
   bool paint_nops_on_transparency();
+  // |rect_fill| is the rect of a drawRect, which may keep a layer
+  // single-sample; see LayerInfo::rect_fills.
   OpResult PaintResult(const DlPaint& paint,
-                       DisplayListAttributeFlags flags = kDrawPaintFlags);
+                       DisplayListAttributeFlags flags = kDrawPaintFlags,
+                       const DlRect* rect_fill = nullptr);
 
   void UpdateLayerResult(OpResult result, DlBlendMode mode) {
     switch (result) {
