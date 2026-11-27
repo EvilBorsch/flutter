@@ -34,6 +34,7 @@ class WindowSurfaceLayer final : public ContainerLayer {
   DlIRect cache_target_;
   DlMatrix cache_matrix_;
   bool cache_prepared_ = false;
+  bool plain_composed_window_ = false;
   // Denial layered composition: the cut registered in Preroll, and for the
   // child constructor the cut that closes its material after the children.
   int64_t denial_cut_ = -1;

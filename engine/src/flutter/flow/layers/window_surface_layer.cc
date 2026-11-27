@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "flutter/flow/layers/window_surface_layer.h"
+
+#include <algorithm>
+
 #include "flutter/common/graphics/texture.h"
 namespace flutter {
 WindowSurfaceLayer::WindowSurfaceLayer(DlWindowSurfaceFilter::Style style,
@@ -85,37 +88,40 @@ void WindowSurfaceLayer::Diff(DiffContext* context, const Layer* old_layer) {
 void WindowSurfaceLayer::Preroll(PrerollContext* context) {
   denial_cut_ = -1;
   denial_end_cut_ = -1;
-  // A composed window (texture_id_ < 0, e.g. a subsurface tree such as
-  // Firefox in tablet mode) without a backdrop or visible frame only clips its
-  // children to content_bounds. Avoid opening a kMaterialBegin cut with
-  // DlWindowSurfaceFilter, which Stagecraft rejects ("material filter") and
-  // forces into engine fallback on every frame.
-  const bool plain_composed_window =
-      texture_id_ < 0 && !backdrop_ &&
-      (style_.frame_color.isTransparent() ||
-       style_.bounds == style_.content_bounds);
-  if (plain_composed_window) {
-    auto clip = context->state_stack.save();
-    if (style_.radius > 0) {
-      clip.clipRRect(DlRoundRect::MakeRectXY(style_.content_bounds,
-                                             style_.radius, style_.radius),
-                     true);
-    } else {
-      clip.clipRect(style_.content_bounds, false);
-    }
-    DlRect child_bounds;
-    PrerollChildren(context, &child_bounds);
-    set_paint_bounds(style_.bounds.Expand(1));
-    context->renderable_state_flags = LayerStateStack::kCallerCanApplyOpacity;
-    return;
-  }
+  plain_composed_window_ = false;
   if (context->view_embedder &&
       context->view_embedder->DenialLayeredComposition()) {
+    MutatorsStack mutators;
+    context->state_stack.fill(&mutators);
+    const DlMatrix matrix = context->state_stack.matrix();
+    if (texture_id_ < 0 && !backdrop_ && style_.radius == 0 &&
+        style_.bounds == style_.content_bounds &&
+        matrix.IsTranslationScaleOnly()) {
+      const DlRect device_bounds =
+          style_.content_bounds.TransformBounds(matrix);
+      // Дробные края требуют сглаживания, а прозрачность применяем
+      // к окну целиком, чтобы его поверхности правильно перекрывались.
+      plain_composed_window_ =
+          DlRect::Round(device_bounds) == device_bounds &&
+          std::none_of(mutators.Begin(), mutators.End(),
+                       [](const auto& mutator) {
+                         return mutator->GetType() == MutatorType::kOpacity &&
+                                mutator->GetAlpha() < 255;
+                       });
+      if (plain_composed_window_) {
+        auto clip = context->state_stack.save();
+        clip.clipRect(style_.content_bounds, false);
+        DlRect child_bounds;
+        PrerollChildren(context, &child_bounds);
+        set_paint_bounds(style_.bounds.Expand(1));
+        context->renderable_state_flags =
+            LayerStateStack::kCallerCanApplyOpacity;
+        return;
+      }
+    }
     // The material reads the composed scene below this window, so the window
     // is a cut: the embedder composes it after the slice recorded so far.
     context->has_texture_layer = true;
-    MutatorsStack mutators;
-    context->state_stack.fill(&mutators);
     DenialCutEntry entry;
     entry.window = material_;
     entry.window_bounds = style_.bounds;
@@ -214,23 +220,12 @@ void WindowSurfaceLayer::Paint(PaintContext& context) const {
       context.canvas->Restore();
     }
   } else {
-    const bool plain_composed_window =
-        !backdrop_ && (style_.frame_color.isTransparent() ||
-                       style_.bounds == style_.content_bounds);
     auto state = context.state_stack.save();
-    if (plain_composed_window) {
-      if (style_.radius > 0) {
-        state.clipRRect(DlRoundRect::MakeRectXY(style_.content_bounds,
-                                                style_.radius, style_.radius),
-                        true);
-      } else {
-        state.clipRect(style_.content_bounds, false);
-      }
-    } else {
+    if (!plain_composed_window_) {
       state.applyBackdropFilter(paint_bounds(), material_, DlBlendMode::kSrc,
                                 token);
-      state.clipRect(style_.content_bounds, false);
     }
+    state.clipRect(style_.content_bounds, false);
     PaintChildren(context);
   }
 }

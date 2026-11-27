@@ -162,6 +162,20 @@ if (enable_unittests) {
     ]
   }
 
+  executable("denial_window_surface_unittests") {
+    testonly = true
+    sources = [
+      "layers/window_surface_layer_unittests.cc",
+      "testing/mock_embedder.cc",
+      "testing/mock_embedder.h",
+    ]
+    deps = [
+      ":flow",
+      "$dart_src/runtime:libdart_jit",
+      "//flutter/third_party/googletest:gtest_main",
+    ]
+  }
+
   executable("flow_unittests") {
     testonly = true
 
