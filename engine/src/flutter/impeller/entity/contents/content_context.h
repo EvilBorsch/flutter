@@ -5,6 +5,7 @@
 #ifndef FLUTTER_IMPELLER_ENTITY_CONTENTS_CONTENT_CONTEXT_H_
 #define FLUTTER_IMPELLER_ENTITY_CONTENTS_CONTENT_CONTEXT_H_
 
+#include <atomic>
 #include <initializer_list>
 #include <memory>
 #include <optional>
@@ -125,6 +126,7 @@ class Tessellator;
 class RenderTargetCache;
 class GlassMaterialSheet;
 class BlurWorkspace;
+class StaticPictureCache;
 
 class ContentContext {
  public:
@@ -132,6 +134,16 @@ class ContentContext {
       std::shared_ptr<Context> context,
       std::shared_ptr<TypographerContext> typographer_context,
       std::shared_ptr<RenderTargetAllocator> render_target_allocator = nullptr);
+
+  // Denial: render passes that could not be created, encoded or submitted.
+  // Their draws are lost, so a caller that publishes what it rendered
+  // compares the count before and after (a nested pass fails silently).
+  void RecordPassFailure() const {
+    pass_failures_.fetch_add(1, std::memory_order_relaxed);
+  }
+  uint64_t GetPassFailures() const {
+    return pass_failures_.load(std::memory_order_relaxed);
+  }
 
   ~ContentContext();
 
@@ -355,6 +367,8 @@ class ContentContext {
   // or pinning a snapshot does not establish that caching saved any work.
   void RecordBackdropSnapshotReuse(int64_t key);
   void CacheBackdropSnapshot(int64_t key, const Snapshot& snapshot);
+  // A replay failed: snapshots it cached may never have been rendered.
+  void DropBackdropSnapshots();
   // Flutter supplies the lifetime of a versioned layer family. The weak
   // owner observes all retained view trees without keeping a layer alive.
   void RegisterBackdropSnapshotOwner(int64_t key, std::weak_ptr<void> owner);
@@ -371,6 +385,15 @@ class ContentContext {
     return frame_repaint_bounds_;
   }
 
+  // The cache that draws static pictures as images where a nested
+  // DisplayList is replayed (AiksContext owns it). None draws them live.
+  void SetStaticPictureCache(StaticPictureCache* cache) {
+    static_picture_cache_ = cache;
+  }
+  StaticPictureCache* GetStaticPictureCache() const {
+    return static_picture_cache_;
+  }
+
  protected:
   // Visible for testing.
   void SetTransientsIndexesBuffer(std::shared_ptr<HostBuffer> host_buffer) {
@@ -383,6 +406,7 @@ class ContentContext {
   }
 
  private:
+  mutable std::atomic<uint64_t> pass_failures_ = 0;
   std::shared_ptr<Context> context_;
   std::shared_ptr<LazyGlyphAtlas> lazy_glyph_atlas_;
 
@@ -450,6 +474,7 @@ class ContentContext {
   size_t backdrop_snapshot_cache_bytes_ = 0u;
   uint64_t backdrop_snapshot_cache_access_ = 0u;
   std::optional<Rect> frame_repaint_bounds_;
+  StaticPictureCache* static_picture_cache_ = nullptr;
 
   struct BackdropSnapshotObservation {
     int64_t key;

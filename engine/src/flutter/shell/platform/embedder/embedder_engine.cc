@@ -363,6 +363,15 @@ bool EmbedderEngine::ScheduleFrameForExternalTextures(
   return true;
 }
 
+bool EmbedderEngine::SetTextureFrameDamage(
+    std::vector<std::pair<int64_t, std::vector<DlRect>>> damage) {
+  if (!IsValid()) {
+    return false;
+  }
+  shell_->SetTextureFrameDamage(std::move(damage));
+  return true;
+}
+
 bool EmbedderEngine::RenderOutputs(std::vector<int64_t> render_view_ids,
                                    std::vector<int64_t> texture_identifiers,
                                    bool rebuild_scene,
@@ -403,6 +412,40 @@ bool EmbedderEngine::SetRenderOutputs(std::vector<DenialRenderOutput> outputs) {
   // transaction. Scheduling a framework frame here would rebuild the Dart
   // scene for every animation sample even though its contents are unchanged.
   return presentation_only || ScheduleFrame();
+}
+
+void EmbedderEngine::SetDenialViewEmbedder(
+    EmbedderExternalViewEmbedder* view_embedder) {
+  denial_view_embedder_ = view_embedder;
+}
+
+bool EmbedderEngine::SetDenialSceneComposer(
+    DenialFlutterSceneComposer composer) {
+  if (!IsValid() || denial_view_embedder_ == nullptr ||
+      denial_scene_composer_installed_) {
+    return false;
+  }
+  denial_scene_composer_installed_ = true;
+  // Raster tasks run in order, so every frame authorized after this call
+  // sees the composer. The rasterizer keeps the view embedder alive.
+  // Placed slices ask for a frame from the raster thread; the platform view
+  // takes it on the platform thread.
+  std::function<void()> frame_request =
+      [runner = shell_->GetTaskRunners().GetPlatformTaskRunner(),
+       platform_view = shell_->GetPlatformView()]() {
+        runner->PostTask([platform_view]() {
+          if (platform_view) {
+            platform_view->ScheduleFrame();
+          }
+        });
+      };
+  shell_->GetTaskRunners().GetRasterTaskRunner()->PostTask(
+      [view_embedder = denial_view_embedder_, composer,
+       frame_request = std::move(frame_request)]() {
+        view_embedder->SetDenialSceneComposer(composer);
+        view_embedder->SetDenialFrameRequest(frame_request);
+      });
+  return true;
 }
 
 #ifdef SHELL_ENABLE_GL
