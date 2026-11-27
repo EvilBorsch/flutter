@@ -1951,7 +1951,11 @@ void DenialTrimSliceAttachments(
              EmbedderExternalViewEmbedder::DenialSliceAttachments>& kept,
     uint64_t frame) {
   constexpr uint64_t kIdleFrames = 240;
-  constexpr size_t kBudgetBytes = size_t{192} << 20;
+  // A single 4x MSAA full-screen slice on a 3392x2400 panel takes ~252 MB
+  // (color + depth/stencil). Keep enough headroom so active full-screen slices
+  // are reused instead of reallocated and cache-cleaned every frame; idle
+  // entries are still released after kIdleFrames.
+  constexpr size_t kBudgetBytes = size_t{512} << 20;
   std::erase_if(kept, [frame](const auto& entry) {
     return frame - entry.second.last_frame > kIdleFrames;
   });
@@ -1960,7 +1964,7 @@ void DenialTrimSliceAttachments(
     bytes += DenialAttachmentBytes(attachments.msaa_color) +
              DenialAttachmentBytes(attachments.depth_stencil);
   }
-  while (bytes > kBudgetBytes && !kept.empty()) {
+  while (bytes > kBudgetBytes && kept.size() > 1) {
     auto oldest = std::min_element(
         kept.begin(), kept.end(), [](const auto& a, const auto& b) {
           return a.second.last_frame < b.second.last_frame;
